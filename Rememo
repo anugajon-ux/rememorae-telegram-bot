@@ -1,0 +1,35 @@
+# Rememorae Telegram Bot
+
+A personal memory + reminder assistant that lives on Telegram.
+
+## ✨ Features
+- Log journal entries, prayers, study notes, and goals
+- Search memories by keyword
+- List your last 10 entries
+- Set daily reminders (devotion time, focus time)
+- Stores data locally in SQLite
+
+## 🚀 Quick Deploy
+
+### 1. Get Your Telegram Token
+- Open Telegram, go to [@BotFather](https://t.me/botfather)
+- Send `/newbot` → follow prompts → get your token.
+
+### 2. Deploy to Railway
+1. Create a free account at [Railway](https://railway.app) and connect your GitHub repo.
+2. Add environment variables:
+   - `TELEGRAM_TOKEN` → your BotFather token
+   - `TZ` → e.g. `Africa/Lagos`
+3. Deploy project → check logs → start using bot.
+
+### 3. Commands
+- `/log category | title | content` → save a memory
+- `/search keyword` → find past entries
+- `/list` → list latest entries
+- `/setreminder HH:MM | message` → schedule daily reminder
+
+---
+
+## 📝 Notes
+- Railway free plan is enough for light use.
+- SQLite is fine for small logs, for heavy use switch to Railway PostgreSQL.
