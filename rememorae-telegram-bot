@@ -1,0 +1,143 @@
+import os
+import asyncio
+import logging
+from datetime import datetime
+import aiosqlite
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from telegram import Update
+from telegram.ext import (
+    Application, CommandHandler, ContextTypes
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+DB_FILE = "rememorae.db"
+
+async def init_db():
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, title TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, time TEXT, message TEXT)"
+        )
+        await db.commit()
+
+async def log_memory(category, title, content):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO memories (category, title, content) VALUES (?, ?, ?)",
+            (category, title, content),
+        )
+        await db.commit()
+
+async def search_memories(keyword):
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute(
+            "SELECT category, title, content, timestamp FROM memories WHERE content LIKE ? ORDER BY timestamp DESC",
+            (f"%{keyword}%",),
+        ) as cursor:
+            return await cursor.fetchall()
+
+async def list_memories(limit=10):
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute(
+            "SELECT category, title, content, timestamp FROM memories ORDER BY timestamp DESC LIMIT ?",
+            (limit,),
+        ) as cursor:
+            return await cursor.fetchall()
+
+async def add_reminder(chat_id, reminder_time, message):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO reminders (chat_id, time, message) VALUES (?, ?, ?)",
+            (chat_id, reminder_time, message),
+        )
+        await db.commit()
+
+async def get_reminders():
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("SELECT id, chat_id, time, message FROM reminders") as cursor:
+            return await cursor.fetchall()
+
+async def delete_reminder(reminder_id):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute("DELETE FROM reminders WHERE id=?", (reminder_id,))
+        await db.commit()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Welcome to Rememorae!\nUse:\n/log category | title | content\n/search keyword\n/list\n/setreminder HH:MM | message")
+
+async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = " ".join(context.args).split("|")
+        category, title, content = [d.strip() for d in data]
+        await log_memory(category, title, content)
+        await update.message.reply_text(f"✅ Logged memory: {title}")
+    except Exception:
+        await update.message.reply_text("Usage: /log category | title | content")
+
+async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /search keyword")
+        return
+    keyword = " ".join(context.args)
+    results = await search_memories(keyword)
+    if not results:
+        await update.message.reply_text("No memories found.")
+    else:
+        text = "\n\n".join([f"[{c}] {t} — {cnt} ({ts})" for c, t, cnt, ts in results])
+        await update.message.reply_text(text[:4000])
+
+async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    results = await list_memories()
+    if not results:
+        await update.message.reply_text("No memories logged yet.")
+    else:
+        text = "\n\n".join([f"[{c}] {t} — {cnt} ({ts})" for c, t, cnt, ts in results])
+        await update.message.reply_text(text[:4000])
+
+async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        data = " ".join(context.args).split("|")
+        reminder_time, message = [d.strip() for d in data]
+        await add_reminder(update.message.chat_id, reminder_time, message)
+        await update.message.reply_text(f"✅ Reminder set for {reminder_time}: {message}")
+    except Exception:
+        await update.message.reply_text("Usage: /setreminder HH:MM | message")
+
+async def reminder_job(app, chat_id, message):
+    await app.bot.send_message(chat_id=chat_id, text=f"🔔 Reminder: {message}")
+
+async def schedule_reminders(app):
+    reminders = await get_reminders()
+    for _, chat_id, t_str, message in reminders:
+        h, m = map(int, t_str.split(":"))
+        scheduler.add_job(
+            reminder_job,
+            "cron",
+            hour=h,
+            minute=m,
+            args=[app, chat_id, message],
+        )
+
+async def main():
+    await init_db()
+    app = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("log", log_cmd))
+    app.add_handler(CommandHandler("search", search_cmd))
+    app.add_handler(CommandHandler("list", list_cmd))
+    app.add_handler(CommandHandler("setreminder", set_reminder))
+
+    global scheduler
+    scheduler = AsyncIOScheduler(timezone=os.getenv("TZ", "UTC"))
+    scheduler.start()
+    await schedule_reminders(app)
+
+    await app.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
